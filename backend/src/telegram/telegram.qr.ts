@@ -4,6 +4,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { Api } from 'telegram';
+import { Logger as GramLogger, LogLevel } from 'telegram/extensions/Logger';
 import { Raw } from 'telegram/events';
 import { computeCheck } from 'telegram/Password';
 import { Buffer } from 'buffer';
@@ -44,6 +45,7 @@ function base64UrlEncode(buf: Buffer) {
 @Injectable()
 export class TelegramQrService implements OnModuleDestroy {
   private readonly logger = new Logger(TelegramQrService.name);
+  private readonly gramLogger = new GramLogger(LogLevel.NONE);
 
   private pending = new Map<string, PendingQr>();
   private locks = new Map<string, Promise<void>>();
@@ -65,15 +67,24 @@ export class TelegramQrService implements OnModuleDestroy {
   }
 
   private newClient(sessionStr = '') {
-    return new TelegramClient(
+    const client = new TelegramClient(
       new StringSession(sessionStr),
       this.apiId(),
       this.apiHash(),
       {
         connectionRetries: 3,
         retryDelay: 1000,
+        baseLogger: this.gramLogger,
       } as any,
     );
+
+    (client as any)._errorHandler = async (error: Error) => {
+      const msg = String((error as any)?.message ?? error);
+      if (msg === 'TIMEOUT') return;
+      this.logger.warn(`TG QR client error: ${msg}`);
+    };
+
+    return client;
   }
 
   private async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {

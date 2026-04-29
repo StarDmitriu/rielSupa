@@ -65,7 +65,9 @@ export class CampaignRepeatService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    this.logger.log(`repeat tick now=${nowIso} due=${(camps ?? []).length}`);
+    if ((camps ?? []).length > 0) {
+      this.logger.log(`repeat tick now=${nowIso} due=${(camps ?? []).length}`);
+    }
 
     for (const c of camps ?? []) {
       await this.campaignsService.repeatWaveIfReady((c as any).id);

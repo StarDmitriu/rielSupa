@@ -64,7 +64,12 @@ export class CampaignBullWorker implements OnModuleInit, OnModuleDestroy {
     });
 
     this.worker.on('failed', (job, err) => {
-      this.logger.error(`failed bull job ${job?.id}: ${err?.message ?? err}`);
+      const msg = String(err?.message ?? err ?? '');
+      if (msg === 'db_job_not_found') {
+        this.logger.warn(`skip failed callback for missing db job ${job?.id}`);
+        return;
+      }
+      this.logger.error(`failed bull job ${job?.id}: ${msg}`);
     });
 
     this.logger.log('BullMQ worker started (campaign-send)');
