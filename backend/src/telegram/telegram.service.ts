@@ -4,6 +4,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { Api } from 'telegram';
+import { CustomFile } from 'telegram/client/uploads';
 import { Buffer } from 'buffer';
 import bigInt from 'big-integer';
 
@@ -96,6 +97,23 @@ function isProbablyImage(contentType: string, url: string) {
     u.endsWith('.png') ||
     u.endsWith('.webp')
   );
+}
+
+function guessExtension(contentType: string, url: string, fallback: string) {
+  const ct = (contentType || '').toLowerCase();
+  if (ct.includes('jpeg')) return 'jpg';
+  if (ct.includes('png')) return 'png';
+  if (ct.includes('webp')) return 'webp';
+  if (ct.includes('gif')) return 'gif';
+  if (ct.includes('mp4')) return 'mp4';
+  if (ct.includes('quicktime')) return 'mov';
+  if (ct.includes('webm')) return 'webm';
+
+  const cleanUrl = String(url || '').toLowerCase().split('?')[0].split('#')[0];
+  const match = cleanUrl.match(/\.([a-z0-9]{2,5})$/);
+  if (match) return match[1];
+
+  return fallback;
 }
 
 async function fetchWithTimeout(url: string, timeoutMs: number) {
@@ -956,9 +974,22 @@ export class TelegramService implements OnModuleDestroy {
     const isImage = isProbablyImage(contentType, mediaUrl);
 
     if (isVideo || isImage) {
+      const ext = guessExtension(
+        contentType,
+        mediaUrl,
+        isImage ? 'jpg' : 'bin',
+      );
+      const upload = new CustomFile(
+        isImage ? `photo.${ext}` : `media.${ext}`,
+        buf.length,
+        '',
+        buf,
+      );
+
       await client.sendFile(peer, {
-        file: buf,
+        file: upload,
         caption: text,
+        mimeType: contentType || undefined,
         forceDocument: false,
       });
       return;
