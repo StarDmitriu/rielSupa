@@ -4,7 +4,9 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { Api } from 'telegram';
+import { generateRandomLong } from 'telegram/Helpers';
 import { CustomFile } from 'telegram/client/uploads';
+import { Logger as GramLogger, LogLevel } from 'telegram/extensions/Logger';
 import { Buffer } from 'buffer';
 import bigInt from 'big-integer';
 
@@ -99,6 +101,41 @@ function isProbablyImage(contentType: string, url: string) {
   );
 }
 
+function detectImageExtension(buf: Buffer): string | null {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return 'jpg';
+  }
+  if (
+    buf.length >= 8 &&
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47 &&
+    buf[4] === 0x0d &&
+    buf[5] === 0x0a &&
+    buf[6] === 0x1a &&
+    buf[7] === 0x0a
+  ) {
+    return 'png';
+  }
+  if (
+    buf.length >= 12 &&
+    buf.toString('ascii', 0, 4) === 'RIFF' &&
+    buf.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'webp';
+  }
+  if (
+    buf.length >= 6 &&
+    (buf.toString('ascii', 0, 6) === 'GIF87a' ||
+      buf.toString('ascii', 0, 6) === 'GIF89a')
+  ) {
+    return 'gif';
+  }
+
+  return null;
+}
+
 function guessExtension(contentType: string, url: string, fallback: string) {
   const ct = (contentType || '').toLowerCase();
   if (ct.includes('jpeg')) return 'jpg';
@@ -163,6 +200,7 @@ export class TelegramService implements OnModuleDestroy {
 
   // --- lock per userId (prevents AUTH_KEY_DUPLICATED races) ---
   private locks = new Map<string, Promise<void>>();
+  private readonly gramLogger = new GramLogger(LogLevel.NONE);
 
   constructor(private readonly supabaseService: SupabaseService) {}
 
@@ -283,6 +321,7 @@ export class TelegramService implements OnModuleDestroy {
     const client = new TelegramClient(session, this.apiId(), this.apiHash(), {
       connectionRetries: 5,
       retryDelay: 1000,
+      baseLogger: this.gramLogger,
     });
 
     await client.connect();
@@ -347,6 +386,7 @@ export class TelegramService implements OnModuleDestroy {
       const session = new StringSession('');
       const client = new TelegramClient(session, this.apiId(), this.apiHash(), {
         connectionRetries: 2,
+        baseLogger: this.gramLogger,
       });
 
       await client.connect();
@@ -970,22 +1010,38 @@ export class TelegramService implements OnModuleDestroy {
       return;
     }
 
+    const detectedImageExt = detectImageExtension(buf);
     const isVideo = isProbablyVideo(contentType, mediaUrl);
-    const isImage = isProbablyImage(contentType, mediaUrl);
+    const isImage = Boolean(detectedImageExt) || isProbablyImage(contentType, mediaUrl);
 
-    if (isVideo || isImage) {
+    if (isImage) {
       const ext = guessExtension(
         contentType,
         mediaUrl,
-        isImage ? 'jpg' : 'bin',
+        detectedImageExt || 'jpg',
       );
-      const upload = new CustomFile(
-        isImage ? `photo.${ext}` : `media.${ext}`,
-        buf.length,
-        '',
-        buf,
-      );
+      const upload = new CustomFile(`photo.${ext}`, buf.length, '', buf);
+      const uploadedFile = await client.uploadFile({
+        file: upload,
+        workers: 1,
+      });
 
+      await client.invoke(
+        new Api.messages.SendMedia({
+          peer,
+          media: new Api.InputMediaUploadedPhoto({
+            file: uploadedFile,
+          }),
+          message: text,
+          randomId: generateRandomLong(true),
+        }),
+      );
+      return;
+    }
+
+    if (isVideo) {
+      const ext = guessExtension(contentType, mediaUrl, 'mp4');
+      const upload = new CustomFile(`media.${ext}`, buf.length, '', buf);
       await client.sendFile(peer, {
         file: upload,
         caption: text,

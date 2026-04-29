@@ -84,7 +84,11 @@ export class CampaignBullWorker implements OnModuleInit, OnModuleDestroy {
       .eq('id', data.jobId)
       .maybeSingle();
 
-    if (jobErr || !dbJob) throw new Error('db_job_not_found');
+    if (jobErr) throw new Error(`db_job_load_failed:${jobErr.message}`);
+    if (!dbJob) {
+      this.logger.warn(`skip missing db job ${data.jobId}`);
+      return;
+    }
 
     if (dbJob.status !== 'pending') return;
 
