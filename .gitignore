@@ -1,0 +1,14 @@
+
+# secrets
+.env
+*.env
+.env.*
+
+# letsencrypt / certbot (do not commit)
+deploy/certbot/
+
+# editor / temp
+*.save
+/package-lock.json
+frontend_verify/
+frontend_verify2/
