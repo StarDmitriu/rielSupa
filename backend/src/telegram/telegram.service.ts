@@ -204,6 +204,15 @@ export class TelegramService implements OnModuleDestroy {
 
   constructor(private readonly supabaseService: SupabaseService) {}
 
+  private configureClient(client: TelegramClient) {
+    (client as any)._errorHandler = async (error: Error) => {
+      const msg = String((error as any)?.message ?? error);
+      if (msg === 'TIMEOUT') return;
+      this.logger.warn(`TG client error: ${msg}`);
+    };
+    return client;
+  }
+
   private async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.locks.get(key) ?? Promise.resolve();
 
@@ -318,11 +327,13 @@ export class TelegramService implements OnModuleDestroy {
     if (this.sessions.has(userId)) return;
 
     const session = new StringSession(sessionStr);
-    const client = new TelegramClient(session, this.apiId(), this.apiHash(), {
-      connectionRetries: 5,
-      retryDelay: 1000,
-      baseLogger: this.gramLogger,
-    });
+    const client = this.configureClient(
+      new TelegramClient(session, this.apiId(), this.apiHash(), {
+        connectionRetries: 5,
+        retryDelay: 1000,
+        baseLogger: this.gramLogger,
+      }),
+    );
 
     await client.connect();
     const me = await client.getMe().catch(() => null);
@@ -384,10 +395,12 @@ export class TelegramService implements OnModuleDestroy {
       }
 
       const session = new StringSession('');
-      const client = new TelegramClient(session, this.apiId(), this.apiHash(), {
-        connectionRetries: 2,
-        baseLogger: this.gramLogger,
-      });
+      const client = this.configureClient(
+        new TelegramClient(session, this.apiId(), this.apiHash(), {
+          connectionRetries: 2,
+          baseLogger: this.gramLogger,
+        }),
+      );
 
       await client.connect();
 
@@ -1015,6 +1028,28 @@ export class TelegramService implements OnModuleDestroy {
     const isImage = Boolean(detectedImageExt) || isProbablyImage(contentType, mediaUrl);
 
     if (isImage) {
+      this.logger.log(
+        `TG image send detected ext=${detectedImageExt || 'unknown'} contentType=${contentType || 'unknown'} url=${mediaUrl}`,
+      );
+
+      try {
+        await client.invoke(
+          new Api.messages.SendMedia({
+            peer,
+            media: new Api.InputMediaPhotoExternal({
+              url: mediaUrl,
+            }),
+            message: text,
+            randomId: generateRandomLong(true),
+          }),
+        );
+        return;
+      } catch (externalErr: any) {
+        this.logger.warn(
+          `TG external photo send failed, fallback to upload: ${String(externalErr?.message ?? externalErr)}`,
+        );
+      }
+
       const ext = guessExtension(
         contentType,
         mediaUrl,
